@@ -9,7 +9,7 @@ backend/**/*.pyc
 backend/.pytest_cache/
 
 # SQLite database
-backend/*.db
+*.db
 
 # Environment variables / secrets
 .env
