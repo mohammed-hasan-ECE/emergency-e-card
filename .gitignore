@@ -1,0 +1,22 @@
+# Python virtual environment
+backend/venv/
+
+# Python cache
+backend/__pycache__/
+backend/**/*.pyc
+
+# Pytest cache
+backend/.pytest_cache/
+
+# SQLite database
+backend/*.db
+
+# Environment variables / secrets
+.env
+.env.*
+
+# Frontend dependencies
+frontend/node_modules/
+
+# Frontend build output
+frontend/dist/
