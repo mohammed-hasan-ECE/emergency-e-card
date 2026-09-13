@@ -367,3 +367,29 @@ def get_nearby_alerts(
         "radius_km": radius_km,
         "nearby_alerts": nearby_alerts
     }
+
+
+@app.post("/alerts/{alert_id}/resolve")
+def resolve_alert(alert_id: str, db: Session = Depends(get_db)):
+    """
+    Mark an emergency alert as resolved.
+    """
+    alert = db.query(EmergencyAlert).filter(
+        EmergencyAlert.id == alert_id
+    ).first()
+
+    if alert is None:
+        raise HTTPException(
+            status_code=404,
+            detail="Alert not found"
+        )
+
+    alert.status = "resolved"
+    db.commit()
+    db.refresh(alert)
+
+    return {
+        "message": "Alert resolved successfully",
+        "alert_id": alert.id,
+        "status": alert.status
+    }
