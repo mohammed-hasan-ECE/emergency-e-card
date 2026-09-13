@@ -7,6 +7,8 @@ import { CreateProfile } from './pages/CreateProfile';
 import { MyCard } from './pages/MyCard';
 import { EditProfile } from './pages/EditProfile';
 import { SOS } from './pages/SOS';
+import { ResponderDashboard } from './pages/ResponderDashboard';
+import { EmergencyDetails } from './pages/EmergencyDetails';
 import './index.css';
 
 createRoot(document.getElementById('root')!).render(
@@ -19,6 +21,8 @@ createRoot(document.getElementById('root')!).render(
           <Route path="/card" element={<MyCard />} />
           <Route path="/edit" element={<EditProfile />} />
           <Route path="/sos" element={<SOS />} />
+          <Route path="/dashboard" element={<ResponderDashboard />} />
+          <Route path="/emergency/:profileId" element={<EmergencyDetails />} />
           <Route path="*" element={<Navigate to="/" replace />} />
         </Routes>
       </Layout>

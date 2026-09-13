@@ -26,25 +26,49 @@ export function CreateProfile() {
   };
 
   const handleSubmit = async (e: React.FormEvent) => {
-    e.preventDefault();
-    setIsSubmitting(true);
-    setError(null);
+  e.preventDefault();
+  setIsSubmitting(true);
+  setError(null);
 
-    try {
-      const newProfile = await profileService.createProfile(formData);
-      if (newProfile.id) {
-        storageService.setProfileId(newProfile.id);
-        navigate('/card');
-      } else {
-        throw new Error('No profile ID returned from server');
-      }
-    } catch (err: any) {
-      console.error('Error creating profile:', err);
-      setError(err.response?.data?.detail || err.message || 'Failed to create profile. Please try again.');
-    } finally {
-      setIsSubmitting(false);
+  try {
+    if (!navigator.geolocation) {
+      throw new Error('Location services are not supported by this browser.');
     }
-  };
+
+    const position = await new Promise<GeolocationPosition>((resolve, reject) => {
+      navigator.geolocation.getCurrentPosition(resolve, reject);
+    });
+
+    const profileData: Omit<Profile, 'id'> = {
+      ...formData,
+      latitude: position.coords.latitude.toString(),
+      longitude: position.coords.longitude.toString(),
+    };
+
+    const newProfile = await profileService.createProfile(profileData);
+
+    if (newProfile.id) {
+      storageService.setProfileId(newProfile.id);
+      navigate('/card');
+    } else {
+      throw new Error('No profile ID returned from server');
+    }
+  } catch (err: any) {
+    console.error('Error creating profile:', err);
+
+    if (err.code === 1) {
+      setError('Location permission was denied. Please allow location access and try again.');
+    } else {
+      setError(
+        err.response?.data?.detail ||
+        err.message ||
+        'Failed to create profile. Please try again.'
+      );
+    }
+  } finally {
+    setIsSubmitting(false);
+  }
+};
 
   return (
     <div className="py-4 space-y-6">

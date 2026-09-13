@@ -1,6 +1,6 @@
 import { useState, useEffect } from 'react';
 import { Link } from 'react-router-dom';
-import type { SOSResponse } from '../types';
+import type { SOSResponse, NearbyUser } from '../types';
 import { sosService } from '../services/api';
 import { storageService } from '../services/storage';
 import { ShieldAlert, AlertTriangle, Droplet, Home } from 'lucide-react';
@@ -106,6 +106,36 @@ export function SOS() {
             content={sosData.emergency_contacts} 
             isHighPriority={true}
           />
+
+          {sosData.nearby_users && sosData.nearby_users.length > 0 && (
+            <div className="p-4 rounded-2xl bg-green-50 border border-green-200">
+              <h3 className="text-xs font-black uppercase tracking-wider mb-3 text-green-800">
+                NEARBY RESPONDERS
+              </h3>
+
+              <div className="space-y-3">
+                {sosData.nearby_users.map((user: NearbyUser) => (
+                  <div
+                    key={user.profile_id}
+                    className="flex items-center justify-between bg-white rounded-xl p-3 border border-green-100"
+                  >
+                    <div>
+                      <p className="font-bold text-gray-900">
+                        {user.full_name}
+                      </p>
+                      <p className="text-sm text-gray-500">
+                        {user.distance_km} km away
+                      </p>
+                    </div>
+
+                    <span className="text-xs font-bold text-green-700 bg-green-100 px-3 py-1 rounded-full">
+                      NEARBY
+                    </span>
+                  </div>
+                ))}
+              </div>
+            </div>
+          )}
         </div>
       </div>
     </div>
