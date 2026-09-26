@@ -6,3 +6,4 @@ httpx>=0.24.0
 pytest
 psycopg2-binary>=2.9.0
 websockets>=10.4
+psycopg[binary]>=3.0.0
