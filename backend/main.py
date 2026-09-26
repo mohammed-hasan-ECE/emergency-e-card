@@ -3,11 +3,13 @@ import math
 from typing import Optional, Dict
 from datetime import datetime, timezone, timedelta
 
-from fastapi import FastAPI, Depends, HTTPException, WebSocket, WebSocketDisconnect
+from fastapi import FastAPI, Depends, HTTPException, Response, WebSocket, WebSocketDisconnect
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel, ConfigDict
 from sqlalchemy import create_engine, Column, String, Text, DateTime, inspect, text, UniqueConstraint
 from sqlalchemy.orm import sessionmaker, declarative_base, Session
+
+from services.communication import EmergencyContext, get_communication_service
 
 # --- Database Setup ---
 import os
@@ -311,12 +313,29 @@ def update_profile(profile_id: str, profile: ProfileUpdate, db: Session = Depend
     db.refresh(db_profile)
     return db_profile
 
-@app.get("/sos/{profile_id}")
-async def sos_alert(
+def _skipped_communications(reason: str) -> dict:
+    """Communications payload used when no new outbound dispatch occurs."""
+    return {
+        "voice": {
+            "channel": "voice",
+            "provider": "mock",
+            "status": "skipped",
+            "error": reason,
+        },
+        "message": {
+            "channel": "message",
+            "provider": "mock",
+            "status": "skipped",
+            "error": reason,
+        },
+    }
+
+
+async def _process_sos(
     profile_id: str,
-    latitude: Optional[float] = None,
-    longitude: Optional[float] = None,
-    db: Session = Depends(get_db)
+    latitude: Optional[float],
+    longitude: Optional[float],
+    db: Session,
 ):
     """
     Trigger an SOS alert, save the emergency event,
@@ -393,7 +412,10 @@ async def sos_alert(
             "medical_conditions": db_profile.medical_conditions,
             "emergency_contacts": db_profile.emergency_contacts,
             "nearby_users": [],  # Existing logic wouldn't re-notify
-            "acknowledged_responders": acknowledged_responders
+            "acknowledged_responders": acknowledged_responders,
+            "communications": _skipped_communications(
+                "Alert already active; duplicate dispatch suppressed"
+            ),
         }
 
     # Create and save new emergency alert
@@ -466,6 +488,37 @@ async def sos_alert(
                     "status": "on_the_way"
                 })
 
+    # Provider-independent outbound communication (best-effort, mock-only).
+    # The alert is already committed above; failures here must not roll it back.
+    try:
+        comm_service = get_communication_service()
+        comm_context = EmergencyContext(
+            alert_id=emergency_alert.id,
+            profile_id=db_profile.id,
+            full_name=db_profile.full_name,
+            latitude=trigger_latitude,
+            longitude=trigger_longitude,
+        )
+        comm_results = await comm_service.dispatch(comm_context)
+        communications = {
+            key: value.model_dump() for key, value in comm_results.items()
+        }
+    except Exception as exc:  # noqa: BLE001 - comms must never break SOS
+        communications = {
+            "voice": {
+                "channel": "voice",
+                "provider": "mock",
+                "status": "failed",
+                "error": f"{type(exc).__name__}: {exc}",
+            },
+            "message": {
+                "channel": "message",
+                "provider": "mock",
+                "status": "failed",
+                "error": f"{type(exc).__name__}: {exc}",
+            },
+        }
+
     return {
         "message": "SOS Alert Triggered",
         "alert_id": emergency_alert.id if not existing_alert else existing_alert.id,
@@ -478,8 +531,42 @@ async def sos_alert(
         "medical_conditions": db_profile.medical_conditions,
         "emergency_contacts": db_profile.emergency_contacts,
         "nearby_users": nearby_users,
-        "acknowledged_responders": acknowledged_responders
+        "acknowledged_responders": acknowledged_responders,
+        "communications": communications,
     }
+
+
+@app.post("/sos/{profile_id}")
+async def sos_alert_post(
+    profile_id: str,
+    latitude: Optional[float] = None,
+    longitude: Optional[float] = None,
+    db: Session = Depends(get_db),
+):
+    """
+    Trigger an SOS alert (preferred endpoint).
+    Uses the existing latitude/longitude query parameters.
+    """
+    return await _process_sos(profile_id, latitude, longitude, db)
+
+
+@app.get("/sos/{profile_id}", deprecated=True)
+async def sos_alert(
+    profile_id: str,
+    latitude: Optional[float] = None,
+    longitude: Optional[float] = None,
+    db: Session = Depends(get_db),
+    response: Response = None,
+):
+    """
+    Deprecated backward-compatible SOS shim. Prefer POST /sos/{profile_id}.
+    Repeat calls within the active-alert window return the existing alert
+    without triggering duplicate external communications.
+    """
+    if response is not None:
+        response.headers["Deprecation"] = "true"
+        response.headers["Sunset"] = "POST /sos/{profile_id} is preferred"
+    return await _process_sos(profile_id, latitude, longitude, db)
 @app.get("/nearby/{profile_id}")
 def find_nearby_users(
     profile_id: str,

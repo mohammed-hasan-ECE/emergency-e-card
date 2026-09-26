@@ -11,6 +11,14 @@ export interface Profile {
   emergency_contacts: string;
 }
 
+export interface CommunicationChannelResult {
+  channel: string;
+  provider: string;
+  status: string;
+  external_id?: string | null;
+  error?: string | null;
+}
+
 export interface SOSResponse {
   message: string;
   alert_id: string;
@@ -22,6 +30,10 @@ export interface SOSResponse {
   emergency_contacts: string;
   nearby_users: NearbyUser[];
   acknowledged_responders?: AcknowledgedResponder[];
+  communications?: {
+    voice?: CommunicationChannelResult;
+    message?: CommunicationChannelResult;
+  };
 }
 export interface NearbyUser {
   profile_id: string;
