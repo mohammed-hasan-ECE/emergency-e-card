@@ -1,13 +1,16 @@
 import uuid
 import math
+import re
 from typing import Optional, Dict
 from datetime import datetime, timezone, timedelta
 
-from fastapi import FastAPI, Depends, HTTPException, WebSocket, WebSocketDisconnect
+from fastapi import FastAPI, Depends, HTTPException, Response, WebSocket, WebSocketDisconnect
 from fastapi.middleware.cors import CORSMiddleware
-from pydantic import BaseModel, ConfigDict
+from pydantic import BaseModel, ConfigDict, field_validator, model_validator
 from sqlalchemy import create_engine, Column, String, Text, DateTime, inspect, text, UniqueConstraint
 from sqlalchemy.orm import sessionmaker, declarative_base, Session
+
+from services.communication import EmergencyContext, get_communication_service
 
 # --- Database Setup ---
 import os
@@ -51,6 +54,9 @@ class Profile(Base):
     medications = Column(Text)
     # Storing emergency contacts as a simple string or JSON string for MVP
     emergency_contacts = Column(Text)
+    # Structured emergency-contact phone used for automated SOS voice calls.
+    # Never parsed from emergency_contacts; never the owner's own number.
+    emergency_contact_phone = Column(String, nullable=True)
 class EmergencyAlert(Base):
     __tablename__ = "emergency_alerts"
 
@@ -81,6 +87,25 @@ class AlertAcknowledgement(Base):
 Base.metadata.create_all(bind=engine)
 
 # --- Pydantic Schemas ---
+# E.164 international format: leading '+', country code without 0, 8-15 digits
+# total. Country-agnostic. Only surrounding whitespace is stripped; the
+# digits themselves are never transformed.
+EMERGENCY_PHONE_PATTERN = re.compile(r"^\+[1-9]\d{7,14}$")
+
+
+def normalize_emergency_contact_phone(value: Optional[str]) -> Optional[str]:
+    if value is None:
+        return None
+    value = value.strip()
+    if not value:
+        return None
+    if not EMERGENCY_PHONE_PATTERN.match(value):
+        raise ValueError(
+            "emergency_contact_phone must be in E.164 format, e.g. +919876543210"
+        )
+    return value
+
+
 class ProfileBase(BaseModel):
     full_name: str
     phone_number: str
@@ -91,9 +116,26 @@ class ProfileBase(BaseModel):
     medical_conditions: Optional[str] = None
     medications: Optional[str] = None
     emergency_contacts: Optional[str] = None
+    emergency_contact_phone: Optional[str] = None
+
+    @field_validator("emergency_contact_phone")
+    @classmethod
+    def validate_emergency_contact_phone(cls, v: Optional[str]) -> Optional[str]:
+        return normalize_emergency_contact_phone(v)
 
 class ProfileCreate(ProfileBase):
-    pass
+    @model_validator(mode="after")
+    def check_contact_phone_not_own(self):
+        if (
+            self.emergency_contact_phone
+            and self.phone_number
+            and self.emergency_contact_phone == self.phone_number.strip()
+        ):
+            raise ValueError(
+                "emergency_contact_phone must be an emergency contact's number, "
+                "not your own phone_number"
+            )
+        return self
 
 class ProfileUpdate(BaseModel):
     full_name: Optional[str] = None
@@ -105,6 +147,12 @@ class ProfileUpdate(BaseModel):
     medical_conditions: Optional[str] = None
     medications: Optional[str] = None
     emergency_contacts: Optional[str] = None
+    emergency_contact_phone: Optional[str] = None
+
+    @field_validator("emergency_contact_phone")
+    @classmethod
+    def validate_emergency_contact_phone(cls, v: Optional[str]) -> Optional[str]:
+        return normalize_emergency_contact_phone(v)
 
 class ProfileResponse(ProfileBase):
     id: str
@@ -219,6 +267,8 @@ def migrate_database():
                 db.execute(text("ALTER TABLE profiles ADD COLUMN latitude VARCHAR"))
             if "longitude" not in columns:
                 db.execute(text("ALTER TABLE profiles ADD COLUMN longitude VARCHAR"))
+            if "emergency_contact_phone" not in columns:
+                db.execute(text("ALTER TABLE profiles ADD COLUMN emergency_contact_phone VARCHAR"))
             db.commit()
         except Exception as e:
             db.rollback()
@@ -304,6 +354,14 @@ def update_profile(profile_id: str, profile: ProfileUpdate, db: Session = Depend
         raise HTTPException(status_code=404, detail="Profile not found")
 
     update_data = profile.model_dump(exclude_unset=True)
+    if update_data.get("emergency_contact_phone"):
+        owner_phone = update_data.get("phone_number", db_profile.phone_number)
+        if owner_phone and update_data["emergency_contact_phone"] == owner_phone.strip():
+            raise HTTPException(
+                status_code=400,
+                detail="emergency_contact_phone must be an emergency contact's number, "
+                "not your own phone_number",
+            )
     for key, value in update_data.items():
         setattr(db_profile, key, value)
 
@@ -311,12 +369,29 @@ def update_profile(profile_id: str, profile: ProfileUpdate, db: Session = Depend
     db.refresh(db_profile)
     return db_profile
 
-@app.get("/sos/{profile_id}")
-async def sos_alert(
+def _skipped_communications(reason: str) -> dict:
+    """Communications payload used when no new outbound dispatch occurs."""
+    return {
+        "voice": {
+            "channel": "voice",
+            "provider": "mock",
+            "status": "skipped",
+            "error": reason,
+        },
+        "message": {
+            "channel": "message",
+            "provider": "mock",
+            "status": "skipped",
+            "error": reason,
+        },
+    }
+
+
+async def _process_sos(
     profile_id: str,
-    latitude: Optional[float] = None,
-    longitude: Optional[float] = None,
-    db: Session = Depends(get_db)
+    latitude: Optional[float],
+    longitude: Optional[float],
+    db: Session,
 ):
     """
     Trigger an SOS alert, save the emergency event,
@@ -391,9 +466,14 @@ async def sos_alert(
             "blood_group": db_profile.blood_group,
             "allergies": db_profile.allergies,
             "medical_conditions": db_profile.medical_conditions,
+            "medications": db_profile.medications,
             "emergency_contacts": db_profile.emergency_contacts,
+            "emergency_contact_phone": db_profile.emergency_contact_phone,
             "nearby_users": [],  # Existing logic wouldn't re-notify
-            "acknowledged_responders": acknowledged_responders
+            "acknowledged_responders": acknowledged_responders,
+            "communications": _skipped_communications(
+                "Alert already active; duplicate dispatch suppressed"
+            ),
         }
 
     # Create and save new emergency alert
@@ -466,6 +546,44 @@ async def sos_alert(
                     "status": "on_the_way"
                 })
 
+    # Provider-independent outbound communication (best-effort).
+    # The alert is already committed above; failures here must not roll it back.
+    # NOTE: emergency_contacts is free-form text and is never parsed for
+    # dialing. destination_phone comes only from the structured
+    # `emergency_contact_phone` field; when absent, the voice provider
+    # reports "skipped" instead of guessing a number. phone_number is the
+    # owner's own number and is never used as the emergency contact.
+    try:
+        comm_service = get_communication_service()
+        destination_phone = db_profile.emergency_contact_phone or None
+        comm_context = EmergencyContext(
+            alert_id=emergency_alert.id,
+            profile_id=db_profile.id,
+            full_name=db_profile.full_name,
+            latitude=trigger_latitude,
+            longitude=trigger_longitude,
+            destination_phone=destination_phone,
+        )
+        comm_results = await comm_service.dispatch(comm_context)
+        communications = {
+            key: value.model_dump() for key, value in comm_results.items()
+        }
+    except Exception as exc:  # noqa: BLE001 - comms must never break SOS
+        communications = {
+            "voice": {
+                "channel": "voice",
+                "provider": "mock",
+                "status": "failed",
+                "error": f"{type(exc).__name__}: {exc}",
+            },
+            "message": {
+                "channel": "message",
+                "provider": "mock",
+                "status": "failed",
+                "error": f"{type(exc).__name__}: {exc}",
+            },
+        }
+
     return {
         "message": "SOS Alert Triggered",
         "alert_id": emergency_alert.id if not existing_alert else existing_alert.id,
@@ -476,10 +594,46 @@ async def sos_alert(
         "blood_group": db_profile.blood_group,
         "allergies": db_profile.allergies,
         "medical_conditions": db_profile.medical_conditions,
+        "medications": db_profile.medications,
         "emergency_contacts": db_profile.emergency_contacts,
+        "emergency_contact_phone": db_profile.emergency_contact_phone,
         "nearby_users": nearby_users,
-        "acknowledged_responders": acknowledged_responders
+        "acknowledged_responders": acknowledged_responders,
+        "communications": communications,
     }
+
+
+@app.post("/sos/{profile_id}")
+async def sos_alert_post(
+    profile_id: str,
+    latitude: Optional[float] = None,
+    longitude: Optional[float] = None,
+    db: Session = Depends(get_db),
+):
+    """
+    Trigger an SOS alert (preferred endpoint).
+    Uses the existing latitude/longitude query parameters.
+    """
+    return await _process_sos(profile_id, latitude, longitude, db)
+
+
+@app.get("/sos/{profile_id}", deprecated=True)
+async def sos_alert(
+    profile_id: str,
+    latitude: Optional[float] = None,
+    longitude: Optional[float] = None,
+    db: Session = Depends(get_db),
+    response: Response = None,
+):
+    """
+    Deprecated backward-compatible SOS shim. Prefer POST /sos/{profile_id}.
+    Repeat calls within the active-alert window return the existing alert
+    without triggering duplicate external communications.
+    """
+    if response is not None:
+        response.headers["Deprecation"] = "true"
+        response.headers["Sunset"] = "POST /sos/{profile_id} is preferred"
+    return await _process_sos(profile_id, latitude, longitude, db)
 @app.get("/nearby/{profile_id}")
 def find_nearby_users(
     profile_id: str,

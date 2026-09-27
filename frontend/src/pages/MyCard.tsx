@@ -148,10 +148,19 @@ export function MyCard() {
             
             <InfoSection 
               icon={<Users className="w-5 h-5 text-green-500" />}
-              title="Emergency Contacts"
+              title="Emergency Contact Name & Relationship"
               content={profile?.emergency_contacts}
               emptyText="No contacts provided"
             />
+
+            {profile?.emergency_contact_phone && (
+              <InfoSection 
+                icon={<Phone className="w-5 h-5 text-green-500" />}
+                title="Emergency Contact Phone (SOS Calls)"
+                content={profile?.emergency_contact_phone}
+                emptyText="No SOS call number provided"
+              />
+            )}
           </div>
         </div>
       </div>

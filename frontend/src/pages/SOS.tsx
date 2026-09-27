@@ -194,10 +194,24 @@ export function SOS() {
           />
 
           <EmergencySection
-            title="EMERGENCY CONTACTS"
+            title="MEDICATIONS"
+            content={sosData.medications}
+            isHighPriority={false}
+          />
+
+          <EmergencySection
+            title="Emergency Contact Name & Relationship"
             content={sosData.emergency_contacts}
             isHighPriority={true}
           />
+
+          {sosData.emergency_contact_phone && (
+            <EmergencySection
+              title="Emergency Contact Phone"
+              content={sosData.emergency_contact_phone}
+              isHighPriority={true}
+            />
+          )}
 
           <div className="p-4 rounded-2xl bg-blue-50 border border-blue-200">
             <h3 className="text-xs font-black uppercase tracking-wider mb-3 text-blue-800 flex items-center justify-between">

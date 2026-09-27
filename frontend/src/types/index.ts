@@ -9,6 +9,15 @@ export interface Profile {
   medical_conditions: string;
   medications: string;
   emergency_contacts: string;
+  emergency_contact_phone?: string;
+}
+
+export interface CommunicationChannelResult {
+  channel: string;
+  provider: string;
+  status: string;
+  external_id?: string | null;
+  error?: string | null;
 }
 
 export interface SOSResponse {
@@ -19,9 +28,15 @@ export interface SOSResponse {
   blood_group: string;
   allergies: string;
   medical_conditions: string;
+  medications: string;
   emergency_contacts: string;
+  emergency_contact_phone: string | null;
   nearby_users: NearbyUser[];
   acknowledged_responders?: AcknowledgedResponder[];
+  communications?: {
+    voice?: CommunicationChannelResult;
+    message?: CommunicationChannelResult;
+  };
 }
 export interface NearbyUser {
   profile_id: string;

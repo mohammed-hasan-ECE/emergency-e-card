@@ -44,7 +44,7 @@ export const sosService = {
   latitude: number,
   longitude: number
 ): Promise<SOSResponse> => {
-  const response = await api.get<SOSResponse>(
+  const response = await api.post<SOSResponse>(
     `/sos/${id}?latitude=${latitude}&longitude=${longitude}`
   );
   return response.data;
