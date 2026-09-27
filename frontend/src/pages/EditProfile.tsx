@@ -19,6 +19,7 @@ export function EditProfile() {
     medical_conditions: '',
     medications: '',
     emergency_contacts: '',
+    emergency_contact_phone: '',
   });
 
   useEffect(() => {
@@ -40,6 +41,7 @@ export function EditProfile() {
           medical_conditions: data.medical_conditions || '',
           medications: data.medications || '',
           emergency_contacts: data.emergency_contacts || '',
+          emergency_contact_phone: data.emergency_contact_phone || '',
         });
       } catch (err: any) {
         console.error('Error fetching profile:', err);
@@ -214,7 +216,7 @@ export function EditProfile() {
         <div className="space-y-1.5">
           <label htmlFor="emergency_contacts" className="text-sm font-medium text-gray-700 flex items-center gap-2">
             <Users className="w-4 h-4 text-green-500" />
-            Emergency Contacts
+            Emergency Contact Name & Relationship
           </label>
           <textarea
             id="emergency_contacts"
@@ -223,7 +225,27 @@ export function EditProfile() {
             value={formData.emergency_contacts}
             onChange={handleChange}
             className="w-full px-4 py-2.5 rounded-xl border border-gray-300 focus:ring-2 focus:ring-brand-500 focus:border-brand-500 outline-none transition-all resize-none"
+            placeholder="e.g., Tim — Husband"
           />
+        </div>
+
+        <div className="space-y-1.5">
+          <label htmlFor="emergency_contact_phone" className="text-sm font-medium text-gray-700 flex items-center gap-2">
+            <Phone className="w-4 h-4 text-green-500" />
+            Emergency Contact Phone
+          </label>
+          <input
+            type="tel"
+            id="emergency_contact_phone"
+            name="emergency_contact_phone"
+            value={formData.emergency_contact_phone}
+            onChange={handleChange}
+            className="w-full px-4 py-2.5 rounded-xl border border-gray-300 focus:ring-2 focus:ring-brand-500 focus:border-brand-500 outline-none transition-all"
+            placeholder="+919876543210"
+            pattern="\+[1-9][0-9]{7,14}"
+            title="International format, e.g. +919876543210"
+          />
+          <p className="text-xs text-gray-500">Used for automated emergency SOS voice calls.</p>
         </div>
 
         <button

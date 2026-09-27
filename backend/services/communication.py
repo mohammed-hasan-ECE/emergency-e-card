@@ -25,6 +25,10 @@ class EmergencyContext:
     """Minimal safe context passed to communication providers.
 
     Only non-sensitive routing fields. No medical details.
+    `destination_phone` is the verified emergency-contact number to dial.
+    It is None when no structured number is available; providers must
+    report "skipped" in that case and must never guess a number from
+    free-form text.
     """
 
     alert_id: str
@@ -32,6 +36,7 @@ class EmergencyContext:
     full_name: str
     latitude: str
     longitude: str
+    destination_phone: Optional[str] = None
 
 
 class CommunicationResult(BaseModel):
@@ -87,6 +92,145 @@ class MockMessageProvider(MessageProvider):
             channel="message",
             provider=self.provider_name,
             status="mock-sent",
+        )
+
+
+EDESY_CALLS_URL = "https://voice-agent.edesy.in/api/v1/calls"
+EDESY_DEFAULT_AGENT_ID = 49976
+EDESY_HTTP_TIMEOUT_SECONDS = 10.0
+
+
+def _read_edesy_agent_id() -> int:
+    raw = os.getenv("EDESY_AGENT_ID", str(EDESY_DEFAULT_AGENT_ID)).strip()
+    try:
+        return int(raw)
+    except ValueError:
+        logger.warning("Invalid EDESY_AGENT_ID=%r; falling back to %d", raw, EDESY_DEFAULT_AGENT_ID)
+        return EDESY_DEFAULT_AGENT_ID
+
+
+def _find_first_present(payload: object, keys: tuple) -> Optional[str]:
+    """Defensively extract the first present string value for given keys.
+
+    Looks at the top level and one level inside common wrappers
+    ("data", "call", "result") to tolerate Edesy response variations.
+    """
+    if not isinstance(payload, dict):
+        return None
+    candidates = [payload]
+    for wrapper in ("data", "call", "result"):
+        nested = payload.get(wrapper)
+        if isinstance(nested, dict):
+            candidates.append(nested)
+    for candidate in candidates:
+        for key in keys:
+            value = candidate.get(key)
+            if isinstance(value, str) and value.strip():
+                return value.strip()
+    return None
+
+
+class EdesyVoiceProvider(VoiceProvider):
+    """Real voice provider using Edesy's Calls API (Voice Agent).
+
+    Sends POST {EDESY_CALLS_URL} with the Voice Agent's Agent ID, the
+    emergency-contact phone number, and Dynamic Variables
+    (currently `person_name`). Never logs or returns the API Key.
+    """
+
+    provider_name = "edesy"
+
+    def __init__(self, http_post=None):
+        # `http_post` is injectable for tests; defaults to httpx.post.
+        # Imported lazily so the module never requires network access.
+        import httpx as _httpx
+
+        self._http_post = http_post or _httpx.post
+        self._httpx_errors = _httpx
+
+    async def place_call(self, context: EmergencyContext) -> CommunicationResult:
+        if not (context.destination_phone or "").strip():
+            return CommunicationResult(
+                channel="voice",
+                provider=self.provider_name,
+                status="skipped",
+                error="No structured emergency-contact phone number available",
+            )
+
+        api_key = os.getenv("EDESY_API_KEY", "").strip()
+        if not api_key:
+            return CommunicationResult(
+                channel="voice",
+                provider=self.provider_name,
+                status="failed",
+                error="EDESY_API_KEY is not configured",
+            )
+
+        agent_id = _read_edesy_agent_id()
+        destination = context.destination_phone.strip()
+        body = {
+            "agentId": agent_id,
+            "phoneNumber": destination,
+            "variables": {
+                "person_name": context.full_name,
+            },
+        }
+
+        try:
+            response = self._http_post(
+                EDESY_CALLS_URL,
+                json=body,
+                headers={"Authorization": "Bearer " + api_key},
+                timeout=EDESY_HTTP_TIMEOUT_SECONDS,
+            )
+        except self._httpx_errors.TimeoutException:
+            return CommunicationResult(
+                channel="voice",
+                provider=self.provider_name,
+                status="failed",
+                error="Edesy Calls API request timed out",
+            )
+        except self._httpx_errors.HTTPError as exc:
+            return CommunicationResult(
+                channel="voice",
+                provider=self.provider_name,
+                status="failed",
+                error=f"Edesy Calls API network error: {type(exc).__name__}",
+            )
+
+        status_code = getattr(response, "status_code", None)
+        if not isinstance(status_code, int) or not 200 <= status_code < 300:
+            return CommunicationResult(
+                channel="voice",
+                provider=self.provider_name,
+                status="failed",
+                error=f"Edesy Calls API error: HTTP {status_code}",
+            )
+
+        try:
+            payload = response.json()
+        except Exception:  # noqa: BLE001 - malformed body, report safely
+            return CommunicationResult(
+                channel="voice",
+                provider=self.provider_name,
+                status="failed",
+                error="Edesy Calls API returned a malformed response",
+            )
+
+        external_id = _find_first_present(
+            payload, ("conversationId", "conversation_id", "callSid", "call_sid", "id")
+        )
+        edesy_status = _find_first_present(payload, ("status", "callStatus", "state"))
+        print(
+            f"[EDESY VOICE] alert_id={context.alert_id} agent_id={agent_id} "
+            f"external_id={external_id} status={edesy_status}",
+            flush=True,
+        )
+        return CommunicationResult(
+            channel="voice",
+            provider=self.provider_name,
+            status="sent",
+            external_id=external_id,
         )
 
 
@@ -151,14 +295,26 @@ class CommunicationService:
 def get_communication_service() -> CommunicationService:
     """Factory for the active communication service.
 
-    Milestone 1 supports mock-only. COMM_PROVIDER env is accepted for
-    forward-compatibility ("mock" default); any other value falls back
-    to mock so no real provider can be activated accidentally.
+    Voice provider selection is environment-controlled:
+
+        COMMUNICATION_VOICE_PROVIDER=mock   -> MockVoiceProvider (default)
+        COMMUNICATION_VOICE_PROVIDER=edesy  -> EdesyVoiceProvider
+
+    Mock remains the default so tests and normal development can never
+    accidentally place a real call. Edesy credentials come from
+    EDESY_API_KEY / EDESY_AGENT_ID and are never hardcoded.
     """
-    provider = os.getenv("COMM_PROVIDER", "mock").strip().lower()
-    if provider not in ("mock", "log"):
-        logger.warning("Unknown COMM_PROVIDER=%r; falling back to mock", provider)
+    voice_provider_name = os.getenv("COMMUNICATION_VOICE_PROVIDER", "mock").strip().lower()
+    if voice_provider_name == "edesy":
+        voice_provider: VoiceProvider = EdesyVoiceProvider()
+    else:
+        if voice_provider_name not in ("mock", ""):
+            logger.warning(
+                "Unknown COMMUNICATION_VOICE_PROVIDER=%r; falling back to mock",
+                voice_provider_name,
+            )
+        voice_provider = MockVoiceProvider()
     return CommunicationService(
-        voice_provider=MockVoiceProvider(),
+        voice_provider=voice_provider,
         message_provider=MockMessageProvider(),
     )

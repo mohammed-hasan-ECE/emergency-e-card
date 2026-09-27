@@ -150,3 +150,156 @@ def test_get_sos_compatibility_shim():
     assert repeat_data["alert_id"] == data["alert_id"]
     assert repeat_data["communications"]["voice"]["status"] == "skipped"
     assert repeat_data["communications"]["message"]["status"] == "skipped"
+
+def _create_profile_payload(**overrides):
+    payload = {
+        "full_name": "Jane Contact",
+        "phone_number": "+14155550001",
+        "blood_group": "A+",
+        "allergies": "None",
+        "medical_conditions": "None",
+        "medications": "None",
+        "emergency_contacts": "John Doe - Brother - +14155559999",
+    }
+    payload.update(overrides)
+    return payload
+
+def test_create_profile_with_contact_phone():
+    response = client.post(
+        "/profiles/",
+        json=_create_profile_payload(emergency_contact_phone="+14155550002"),
+    )
+    assert response.status_code == 201
+    data = response.json()
+    assert data["emergency_contact_phone"] == "+14155550002"
+    # Existing free-form field remains untouched
+    assert data["emergency_contacts"] == "John Doe - Brother - +14155559999"
+
+def test_get_profile_returns_contact_phone():
+    created = client.post(
+        "/profiles/",
+        json=_create_profile_payload(emergency_contact_phone="+14155550003"),
+    ).json()
+    response = client.get(f"/profiles/{created['id']}")
+    assert response.status_code == 200
+    assert response.json()["emergency_contact_phone"] == "+14155550003"
+
+def test_update_contact_phone():
+    profile_id = client.post("/profiles/", json=_create_profile_payload()).json()["id"]
+    response = client.put(
+        f"/profiles/{profile_id}",
+        json=_create_profile_payload(emergency_contact_phone="+14155550004"),
+    )
+    assert response.status_code == 200
+    assert response.json()["emergency_contact_phone"] == "+14155550004"
+
+def test_profile_without_contact_phone_still_works():
+    response = client.post("/profiles/", json=_create_profile_payload())
+    assert response.status_code == 201
+    assert response.json()["emergency_contact_phone"] is None
+
+def test_invalid_contact_phone_rejected():
+    for bad in ["abc", "12345", "919876543210", "+0", "+123", "+919876543210123456"]:
+        response = client.post(
+            "/profiles/", json=_create_profile_payload(emergency_contact_phone=bad)
+        )
+        assert response.status_code == 422, bad
+
+def test_contact_phone_cannot_be_own_number():
+    payload = _create_profile_payload(
+        phone_number="+14155550005", emergency_contact_phone="+14155550005"
+    )
+    assert client.post("/profiles/", json=payload).status_code == 422
+
+    profile_id = client.post("/profiles/", json=_create_profile_payload()).json()["id"]
+    stored = client.get(f"/profiles/{profile_id}").json()
+    response = client.put(
+        f"/profiles/{profile_id}",
+        json={"emergency_contact_phone": stored["phone_number"]},
+    )
+    assert response.status_code == 400
+
+class _CapturingService:
+    """Test stand-in for CommunicationService. Records contexts, never dials."""
+
+    def __init__(self):
+        self.contexts = []
+
+    async def dispatch(self, context):
+        from services.communication import CommunicationResult
+
+        self.contexts.append(context)
+        return {
+            "voice": CommunicationResult(
+                channel="voice", provider="test", status="sent", external_id="ext-1"
+            ),
+            "message": CommunicationResult(
+                channel="message", provider="test", status="sent"
+            ),
+        }
+
+def test_sos_passes_structured_destination_phone(monkeypatch):
+    service = _CapturingService()
+    monkeypatch.setattr(main, "get_communication_service", lambda: service)
+    profile_id = client.post(
+        "/profiles/",
+        json=_create_profile_payload(emergency_contact_phone="+14155550006"),
+    ).json()["id"]
+
+    response = client.post(f"/sos/{profile_id}?latitude=12.9716&longitude=77.5946")
+
+    assert response.status_code == 200
+    assert len(service.contexts) == 1
+    context = service.contexts[0]
+    # Structured field is used verbatim; free-form text is never parsed.
+    assert context.destination_phone == "+14155550006"
+    assert context.destination_phone != "+14155559999"
+    assert response.json()["communications"]["voice"]["external_id"] == "ext-1"
+
+def test_sos_without_contact_phone_has_no_destination(monkeypatch):
+    service = _CapturingService()
+    monkeypatch.setattr(main, "get_communication_service", lambda: service)
+    profile_id = client.post("/profiles/", json=_create_profile_payload()).json()["id"]
+
+    response = client.post(f"/sos/{profile_id}?latitude=12.9716&longitude=77.5946")
+
+    assert response.status_code == 200
+    assert service.contexts[0].destination_phone is None
+
+def test_sos_responses_include_structured_contact():
+    profile_id = client.post(
+        "/profiles/",
+        json=_create_profile_payload(
+            emergency_contacts="Tim — Husband",
+            emergency_contact_phone="+14155550007",
+        ),
+    ).json()["id"]
+
+    first = client.post(f"/sos/{profile_id}?latitude=12.9716&longitude=77.5946")
+    assert first.status_code == 200
+    first_data = first.json()
+    assert first_data["emergency_contacts"] == "Tim — Husband"
+    assert first_data["emergency_contact_phone"] == "+14155550007"
+
+    second = client.post(f"/sos/{profile_id}?latitude=12.9716&longitude=77.5946")
+    assert second.status_code == 200
+    second_data = second.json()
+    assert second_data["message"] == "SOS Alert already active"
+    assert second_data["emergency_contact_phone"] == "+14155550007"
+
+def test_sos_responses_include_medications():
+    profile_id = client.post(
+        "/profiles/",
+        json=_create_profile_payload(medications="Insulin 10mg daily"),
+    ).json()["id"]
+
+    first_data = client.post(
+        f"/sos/{profile_id}?latitude=12.9716&longitude=77.5946"
+    ).json()
+    assert first_data["medications"] == "Insulin 10mg daily"
+
+    second_data = client.post(
+        f"/sos/{profile_id}?latitude=12.9716&longitude=77.5946"
+    ).json()
+    assert second_data["message"] == "SOS Alert already active"
+    assert second_data["medications"] == "Insulin 10mg daily"
