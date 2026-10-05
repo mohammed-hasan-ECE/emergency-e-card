@@ -97,14 +97,20 @@ def _normalize_voice_models(value) -> dict:
 
 
 def _stored_notification_summary(alert) -> dict:
-    """Rebuild the notifications block from the persisted attempt log."""
+    """Rebuild the notifications block from the persisted attempt log.
+
+    Uses the LATEST attempt per channel: earlier failures must not shadow
+    a later successful retry in the reported summary.
+    """
     try:
         entries = json.loads(alert.notification_log) if alert.notification_log else []
     except Exception:  # noqa: BLE001 - corrupt log degrades to skipped
         entries = []
     summary = {}
     for channel in ("whatsapp", "sms"):
-        match = next((e for e in entries if e.get("channel") == channel), None)
+        match = next(
+            (e for e in reversed(entries) if e.get("channel") == channel), None
+        )
         summary[channel] = match or {
             "channel": channel,
             "provider": f"mock-{channel}",

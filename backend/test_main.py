@@ -802,3 +802,60 @@ def test_tracking_token_never_logged(monkeypatch, caplog):
     token = _tracking_token_from_url(data["tracking_url"])
     for record in caplog.records:
         assert token not in record.getMessage()
+
+def test_retry_summary_reports_latest_attempt_per_channel(monkeypatch):
+    from services.notification import NotificationService
+
+    class FailingWhatsApp:
+        provider_name = "mock-whatsapp"
+
+        async def send(self, context):
+            raise RuntimeError("mock whatsapp down")
+
+    class FailingSMS:
+        provider_name = "mock-sms"
+
+        async def send(self, context):
+            raise RuntimeError("mock sms down")
+
+    monkeypatch.setattr(
+        main,
+        "get_notification_service",
+        lambda: NotificationService(
+            whatsapp_provider=FailingWhatsApp(),
+            sms_provider=FailingSMS(),
+        ),
+    )
+    profile_id = _sos_profile_with_contact(phone="+14155550107")
+    alert_id = client.post(
+        f"/sos/{profile_id}?latitude=12.5&longitude=77.5"
+    ).json()["alert_id"]
+
+    # Manual retry with working providers succeeds on WhatsApp.
+    from services.notification import get_notification_service
+
+    monkeypatch.setattr(main, "get_notification_service", get_notification_service)
+    retry = client.post(f"/alerts/{alert_id}/notify?profile_id={profile_id}").json()
+    assert retry["notifications"]["whatsapp"]["status"] == "sent"
+
+    # The persisted log keeps every attempt, newest last.
+    import json as json_mod
+
+    db = TestingSessionLocal()
+    try:
+        entries = json_mod.loads(
+            db.query(main.EmergencyAlert).filter(
+                main.EmergencyAlert.id == alert_id
+            ).first().notification_log
+        )
+    finally:
+        db.close()
+    whatsapp_entries = [e for e in entries if e["channel"] == "whatsapp"]
+    assert [e["status"] for e in whatsapp_entries] == ["failed", "sent"]
+
+    # A further retry reports "already sent" with the LATEST outcome,
+    # not the stale initial failure.
+    again = client.post(f"/alerts/{alert_id}/notify?profile_id={profile_id}").json()
+    assert again["message"] == "Notification already sent"
+    assert again["notifications"]["whatsapp"]["status"] == "sent"
+    assert again["notifications"]["whatsapp"]["external_id"]
