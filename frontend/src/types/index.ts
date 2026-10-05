@@ -10,9 +10,18 @@ export interface Profile {
   medications: string;
   emergency_contacts: string;
   emergency_contact_phone?: string;
+  location_publish_token?: string | null;
 }
 
 export interface CommunicationChannelResult {
+  channel: string;
+  provider: string;
+  status: string;
+  external_id?: string | null;
+  error?: string | null;
+}
+
+export interface NotificationChannelResult {
   channel: string;
   provider: string;
   status: string;
@@ -33,9 +42,14 @@ export interface SOSResponse {
   emergency_contact_phone: string | null;
   nearby_users: NearbyUser[];
   acknowledged_responders?: AcknowledgedResponder[];
+  tracking_url?: string;
   communications?: {
     voice?: CommunicationChannelResult;
     message?: CommunicationChannelResult;
+  };
+  notifications?: {
+    whatsapp?: NotificationChannelResult;
+    sms?: NotificationChannelResult;
   };
 }
 export interface NearbyUser {
@@ -59,5 +73,15 @@ export interface AcknowledgedResponder {
   full_name: string;
   responder_phone?: string;
   status: string;
+}
+
+export interface TrackInfo {
+  person_name: string;
+  tracking_active: boolean;
+  location_status: string;
+  location_updated_at: string | null;
+  has_location: boolean;
+  maps_url: string | null;
+  map_embed_url: string | null;
 }
 

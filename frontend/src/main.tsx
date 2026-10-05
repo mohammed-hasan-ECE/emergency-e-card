@@ -9,6 +9,7 @@ import { EditProfile } from './pages/EditProfile';
 import { SOS } from './pages/SOS';
 import { ResponderDashboard } from './pages/ResponderDashboard';
 import { EmergencyDetails } from './pages/EmergencyDetails';
+import { TrackPage } from './pages/TrackPage';
 import './index.css';
 
 createRoot(document.getElementById('root')!).render(
@@ -23,6 +24,7 @@ createRoot(document.getElementById('root')!).render(
           <Route path="/sos" element={<SOS />} />
           <Route path="/dashboard" element={<ResponderDashboard />} />
           <Route path="/emergency/:profileId" element={<EmergencyDetails />} />
+          <Route path="/track/:token" element={<TrackPage />} />
           <Route path="*" element={<Navigate to="/" replace />} />
         </Routes>
       </Layout>

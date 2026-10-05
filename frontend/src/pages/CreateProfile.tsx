@@ -50,6 +50,9 @@ export function CreateProfile() {
 
     if (newProfile.id) {
       storageService.setProfileId(newProfile.id);
+      if (newProfile.location_publish_token) {
+        storageService.setLocationPublishToken(newProfile.location_publish_token);
+      }
       navigate('/card');
     } else {
       throw new Error('No profile ID returned from server');

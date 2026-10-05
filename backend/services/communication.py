@@ -10,6 +10,7 @@ credentials, or full medical records.
 """
 
 import logging
+import asyncio
 import os
 from abc import ABC, abstractmethod
 from dataclasses import dataclass
@@ -100,6 +101,50 @@ EDESY_DEFAULT_AGENT_ID = 49976
 EDESY_HTTP_TIMEOUT_SECONDS = 10.0
 
 
+def parse_coordinates(latitude, longitude) -> Optional[tuple]:
+    """Parse stored string coordinates into (lat, lon) floats.
+
+    Returns None when missing, non-numeric, or out of range.
+    Shared by the SOS flow, the Edesy provider, and the voice tool so
+    Milestone 4 can reuse the same source.
+    """
+    try:
+        lat = float(latitude)
+        lon = float(longitude)
+    except (TypeError, ValueError):
+        return None
+    if not (-90 <= lat <= 90) or not (-180 <= lon <= 180):
+        return None
+    return (lat, lon)
+
+
+def google_maps_url(latitude, longitude) -> Optional[str]:
+    """Public Google Maps URL for coordinates, or None when invalid."""
+    coords = parse_coordinates(latitude, longitude)
+    if coords is None:
+        return None
+    return f"https://www.google.com/maps?q={coords[0]},{coords[1]}"
+
+
+def map_embed_url(latitude, longitude) -> Optional[str]:
+    """Keyless OpenStreetMap embed URL with a marker, or None when invalid.
+
+    Coordinates stay render data: callers must never present them as text.
+    Tile fetches inherently reveal the viewed area to the tile provider;
+    documented tradeoff of a keyless free map.
+    """
+    coords = parse_coordinates(latitude, longitude)
+    if coords is None:
+        return None
+    lat, lon = coords
+    delta = 0.01
+    return (
+        "https://www.openstreetmap.org/export/embed.html"
+        f"?bbox={lon - delta}%2C{lat - delta}%2C{lon + delta}%2C{lat + delta}"
+        f"&layer=mapnik&marker={lat}%2C{lon}"
+    )
+
+
 def _read_edesy_agent_id() -> int:
     raw = os.getenv("EDESY_AGENT_ID", str(EDESY_DEFAULT_AGENT_ID)).strip()
     try:
@@ -134,8 +179,9 @@ class EdesyVoiceProvider(VoiceProvider):
     """Real voice provider using Edesy's Calls API (Voice Agent).
 
     Sends POST {EDESY_CALLS_URL} with the Voice Agent's Agent ID, the
-    emergency-contact phone number, and Dynamic Variables
-    (currently `person_name`). Never logs or returns the API Key.
+    emergency-contact phone number, and the `person_name` Dynamic Variable.
+    Location is handled separately by the tracking system, never by voice.
+    Never logs or returns the API Key.
     """
 
     provider_name = "edesy"
@@ -177,7 +223,10 @@ class EdesyVoiceProvider(VoiceProvider):
         }
 
         try:
-            response = self._http_post(
+            # Sync httpx call runs in a thread so a slow provider cannot
+            # stall the event loop (and delay parallel channels in gather).
+            response = await asyncio.to_thread(
+                self._http_post,
                 EDESY_CALLS_URL,
                 json=body,
                 headers={"Authorization": "Bearer " + api_key},
