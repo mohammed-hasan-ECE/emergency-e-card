@@ -76,3 +76,48 @@ Behavior:
   parsed for dialing; when no structured number is present, voice dispatch
   reports `skipped` instead of guessing a number. The owner's own
   `phone_number` is never used as the call destination.
+
+## Live Location Tracking + Contact Notification
+
+ SOS creates a secure tracking session for the emergency contact:
+
+ - `Profile.location_updated_at` records when coordinates were last updated
+   (profile creation, the device publish endpoint, and the SOS trigger itself
+   when it carries coordinates). The SOS trigger snapshot on
+   `EmergencyAlert` is preserved for responder proximity.
+ - Each alert mints one opaque `tracking_token`; the contact opens
+   `/track/{token}` (no login), which polls `GET /track/{token}` and shows a
+   map marker plus live/latest-known/unavailable states. Tracking is valid
+   only while the alert is active and unexpired; afterwards the link returns
+   410 with zero location data. Coordinates are never rendered as text.
+ - Device location publishing uses `PUT /profiles/{id}/location` with the
+   per-profile publish token (`X-Location-Token` header; hash stored, raw
+   shown once at creation/rotation). The general profile endpoint no longer
+   accepts coordinates, and the tracking token can never authorize writes.
+ - Notifications are mock-only via `services/notification.py` (WhatsApp
+   preferred, single SMS fallback, best-effort duplicate prevention). No
+   coordinates appear in message content — only the tracking link.
+
+ Environment (placeholders only, never real secrets):
+
+ ```bash
+ COMMUNICATION_VOICE_PROVIDER=mock   # `mock` (default) or `edesy`.
+ TRACKING_BASE_URL=                  # e.g. https://<tunnel-url> for absolute
+                                     # tracking links; empty keeps /track/…
+ LOCATION_STALE_AFTER_SECONDS=300    # live vs latest-known threshold.
+ ```
+
+ The Edesy Voice Agent carries no location: the voice payload contains only
+ the `person_name` Dynamic Variable, and the former `/voice/location` tool
+ endpoint has been retired in favor of the tracking system above.
+
+ Local end-to-end testing:
+
+ 1. Run the backend (`uvicorn main:app --reload`) and frontend locally.
+ 2. Expose the backend through a temporary HTTPS tunnel (e.g. a tunnel
+    service of your choice). The tunnel URL is temporary: never hard-code or
+    commit it; set it as `TRACKING_BASE_URL` only in the local environment.
+ 3. Trigger SOS from a test profile, open the returned `tracking_url` in a
+    separate browser, update the profile location mid-SOS, and confirm the
+    tracking page shows the new position. Resolve the SOS and confirm the
+    link reports tracking ended.

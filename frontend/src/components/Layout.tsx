@@ -14,9 +14,46 @@ export function Layout({ children }: LayoutProps) {
   const lastLocationUpdateRef = useRef(0);
 
   useEffect(() => {
+    // Never run device tracking on the public tracking page.
+    if (location.pathname.startsWith('/track')) {
+      return;
+    }
+
     if (!navigator.geolocation) {
       return;
     }
+
+    // One-time bootstrap: existing devices created before publish tokens
+    // existed pair exactly once via rotation, then store the raw token.
+    const bootstrapToken = async () => {
+      const currentProfileId = storageService.getProfileId();
+
+      if (!currentProfileId || storageService.getLocationPublishToken()) {
+        return;
+      }
+
+      try {
+        const profile = await profileService.getProfile(currentProfileId);
+
+        if (!profile.phone_number) {
+          return;
+        }
+
+        const rotated = await profileService.rotateLocationToken(
+          currentProfileId,
+          profile.phone_number
+        );
+
+        if (rotated.location_publish_token) {
+          storageService.setLocationPublishToken(rotated.location_publish_token);
+        }
+      } catch (err) {
+        // Silent backoff: retry on next app start. Never blocks the UI.
+        console.error('Failed to bootstrap location token:', err);
+      }
+    };
+
+    bootstrapToken();
 
     const watchId = navigator.geolocation.watchPosition(
       async (position) => {
@@ -35,11 +72,20 @@ export function Layout({ children }: LayoutProps) {
 
         lastLocationUpdateRef.current = now;
 
+        const publishToken = storageService.getLocationPublishToken();
+
+        if (!publishToken) {
+          // No publish token yet (bootstrap pending): skip rather than
+          // sending an unauthenticated update.
+          return;
+        }
+
         try {
           await profileService.updateProfileLocation(
             currentProfileId,
             position.coords.latitude,
-            position.coords.longitude
+            position.coords.longitude,
+            publishToken
           );
         } catch (err) {
           console.error('Failed to update live location:', err);

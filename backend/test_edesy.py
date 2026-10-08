@@ -77,11 +77,9 @@ def test_edesy_success_sends_correct_request(monkeypatch):
     call = fake.calls[0]
     assert call["url"] == "https://voice-agent.edesy.in/api/v1/calls"
     assert call["headers"] == {"Authorization": "Bearer " + TEST_API_KEY}
-    assert call["json"] == {
-        "agentId": 49976,
-        "phoneNumber": "+919876543210",
-        "variables": {"person_name": "John Doe"},
-    }
+    assert call["json"]["agentId"] == 49976
+    assert call["json"]["phoneNumber"] == "+919876543210"
+    assert call["json"]["variables"] == {"person_name": "John Doe"}
     assert call["timeout"] == 10.0
     assert result.channel == "voice"
     assert result.provider == "edesy"

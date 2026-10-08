@@ -399,7 +399,7 @@ Users should not rely on this prototype as their sole means of obtaining emergen
 
 | Member             | Role                            |
 | ------------------ | ------------------------------- |
-| **Mohammed Hasan** | Team Leader & Backend Developer |
+| **Mohammad Hasan** | Team Leader & Backend Developer |
 | **Niranjan S J**   | Team Member                     |
 | **Jaiabner N**     | Team Member                     |
 
