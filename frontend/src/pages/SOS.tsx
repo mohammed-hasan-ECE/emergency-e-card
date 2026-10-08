@@ -280,24 +280,31 @@ export function SOS() {
           )}
 
           {(() => {
-            const wa = sosData.notifications?.whatsapp;
-            const sms = sosData.notifications?.sms;
-            const sent = wa?.status === 'sent' ? 'WhatsApp' : sms?.status === 'sent' ? 'SMS' : null;
+            const notifications = sosData.notifications;
+            if (!notifications) return null;
 
-            if (!sosData.notifications) return null;
+            const results = Object.values(notifications);
+            const isMock = results.some(
+              (result) => result?.provider?.startsWith('mock-')
+            );
+            const sent = results.some((result) => result?.status === 'sent');
 
             return (
               <div className="p-4 rounded-2xl bg-purple-50 border border-purple-200">
                 <h3 className="text-xs font-black uppercase tracking-wider mb-2 text-purple-800">
                   Emergency contact notification
                 </h3>
-                {sent ? (
+                {isMock ? (
+                  <p className="text-purple-700 text-sm font-medium italic">
+                    Contact notification is not connected yet.
+                  </p>
+                ) : sent ? (
                   <p className="text-purple-700 text-sm font-medium">
-                    Contact notified via {sent}. A live tracking link was shared.
+                    Your contact has been notified.
                   </p>
                 ) : (
                   <p className="text-purple-700 text-sm font-medium italic">
-                    Contact notification pending or unavailable.
+                    Your contact could not be notified.
                   </p>
                 )}
               </div>
