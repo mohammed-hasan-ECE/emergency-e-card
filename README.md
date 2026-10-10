@@ -6,7 +6,7 @@
 
 - **Live demo:** https://emergency-e-card-1.onrender.com
 - **This repository:** https://github.com/mohammed-hasan-ECE/emergency-e-card
-- **Project:** Morrow 1.0 · Round 2 · Team BIT-CRAFT
+
 
 > **Prototype and delivery note:** This project is not a substitute for official emergency services. The WhatsApp/SMS notification providers in the current code are mocks, and the voice-call integration defaults to a mock provider. Browser Web Push for notifications while the website is closed is not implemented in the current pushed `main` branch. Do not assume that any real notification or call was delivered unless it has been verified separately.
 
